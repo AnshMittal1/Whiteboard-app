@@ -35,6 +35,9 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
   const redoStack = useRef<any[]>([]);
   const historyLocked = useRef(false); // Prevents "Undo" from recording itself
 
+  // --- NEW REF FOR CLIPBOARD ---
+  const clipboard = useRef<any>(null);
+
 
   // CUSTOM LINE CONTROLS HELPER
   // CUSTOM LINE CONTROLS HELPER
@@ -751,18 +754,195 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
       });
     });
 
+
+    // Helper: clone a Fabric object robustly (works with callback-style and Promise-style clone APIs)
+    const cloneFabricObject = async (obj: fabric.Object): Promise<fabric.Object> => {
+      // Try Promise-style clone (Fabric v6+ may return a Promise)
+      try {
+        // Some Fabric versions return a Promise from clone()
+        const maybePromise = (obj as any).clone();
+        // If it returned a thenable / Promise, await it:
+        if (maybePromise && typeof maybePromise.then === 'function') {
+          const cloned = await maybePromise;
+          if (cloned) return cloned;
+        }
+      } catch (e) {
+        // ignore - we'll try the callback fallback
+      }
+
+      // Callback-style fallback: obj.clone(cb)
+      return await new Promise<fabric.Object>((resolve) => {
+        (obj as any).clone((cloned: fabric.Object) => {
+          resolve(cloned);
+        });
+      });
+    };
+
+    // Helper: add an object to canvas, reapply controls, set coords, and ensure RBush index is updated
+    const addAndIndex = (obj: fabric.Object) => {
+      // Make sure the object is interactive and visible
+      obj.set({
+        evented: true,
+        selectable: true,
+      });
+
+      // Small visual offset so paste is visible as a duplicate
+      if (typeof obj.left === 'number' && typeof obj.top === 'number') {
+        obj.set({
+          left: obj.left + 20,
+          top: obj.top + 20,
+        });
+      }
+
+      // Add to canvas (this will ensure object belongs to the canvas)
+      canvas.add(obj);
+
+      // Re-apply any custom controls for special object types
+      if (obj.type === 'line') configureLineControls(obj as fabric.Line);
+      else if (obj.type === 'path') configureArrowControls(obj as fabric.Path);
+
+      // Force geometry recalculation
+      obj.setCoords();
+
+      // Immediately update our RBush index (prevents culling race)
+      updateIndex(obj);
+    };
+
+
+
+    // --- COPY & PASTE LOGIC ---
+
+    const copy = async () => {
+      const activeObject = canvas.getActiveObject();
+      if (!activeObject) return;
+      // Clone the object. In Fabric v6+, this is async.
+      // We explicitly ask to include specific properties if needed.
+      const cloned = await activeObject.clone(['id']);
+      clipboard.current = cloned;
+    };
+
+    const paste = async () => {
+      if (!clipboard.current) return;
+
+      // If clipboard is an ActiveSelection (multi-object)
+      const isActiveSelection =
+        clipboard.current.type === 'activeSelection' ||
+        (clipboard.current.getObjects && typeof clipboard.current.getObjects === 'function');
+
+      // NEW: if it's a multi-object selection, clone each object individually
+      if (isActiveSelection) {
+        // Get the source objects from the clipboard group/selection
+        const sourceObjects = clipboard.current.getObjects
+          ? clipboard.current.getObjects()
+          : (clipboard.current._objects || []);
+
+        const pastedObjects: fabric.Object[] = [];
+
+        // Clone each object individually (avoids group-relative transform bugs)
+        for (const src of sourceObjects) {
+          const cloned = await cloneFabricObject(src);
+
+          // Try to base pasted position on the source object's bounding rect (world coords)
+          // getBoundingRect(true) uses object's transform; works when src was on canvas
+          try {
+            const bbox = src.getBoundingRect(true); // true = absolute coords
+            cloned.set({
+              left: (typeof bbox.left === 'number' ? bbox.left : (src.left ?? 0)) + 20,
+              top:  (typeof bbox.top === 'number'  ? bbox.top  : (src.top  ?? 0)) + 20,
+            });
+          } catch {
+            // fallback - use src.left/top if bbox fails
+            cloned.set({
+              left: (src.left ?? 0) + 20,
+              top:  (src.top  ?? 0) + 20,
+            });
+          }
+
+          // Disconnect cloned from any original group/canvas
+          cloned.canvas = undefined as unknown as fabric.Canvas;
+
+          pastedObjects.push(cloned);
+        }
+
+        // Add each cloned object to the canvas and update index synchronously
+        pastedObjects.forEach((p) => addAndIndex(p));
+
+        // Create a new ActiveSelection from the freshly added objects and select them
+        const newSelection = new fabric.ActiveSelection(pastedObjects, { canvas: canvas });
+        canvas.setActiveObject(newSelection);
+
+        // Make sure culling/visibility is correct now that RBush is up-to-date
+        updateVisibleObjects();
+        canvas.requestRenderAll();
+        return;
+      }
+
+      // --- SINGLE-OBJECT paste (unchanged, but included for completeness) ---
+      const clonedObj = await clipboard.current.clone(['id']);
+      canvas.discardActiveObject();
+      clonedObj.set({
+        left: clonedObj.left + 20,
+        top: clonedObj.top + 20,
+        evented: true,
+      });
+
+      if (clonedObj.type === 'activeSelection') {
+        // If Fabric returned an activeSelection, add each object individually
+        clonedObj.canvas = canvas;
+        clonedObj.forEachObject((obj: any) => {
+          canvas.add(obj);
+          if (obj.type === 'line') configureLineControls(obj);
+          else if (obj.type === 'path') configureArrowControls(obj);
+          obj.setCoords();
+          updateIndex(obj);
+        });
+
+        const newSelection = new fabric.ActiveSelection(clonedObj.getObjects(), {
+          canvas: canvas,
+        });
+        canvas.setActiveObject(newSelection);
+      } else {
+        canvas.add(clonedObj);
+        if (clonedObj.type === 'line') configureLineControls(clonedObj);
+        else if (clonedObj.type === 'path') configureArrowControls(clonedObj);
+        clonedObj.setCoords();
+        updateIndex(clonedObj);
+        canvas.setActiveObject(clonedObj);
+      }
+
+      canvas.requestRenderAll();
+    };
+
+
+
     // --- KEYBOARD LISTENERS ---
-    const handleKeyDown = (e: KeyboardEvent) => {
+    // --- KEYBOARD LISTENERS ---
+    const handleKeyDown = async (e: KeyboardEvent) => {
       // Check for Ctrl (Windows) or Meta (Mac)
       const isCmd = e.ctrlKey || e.metaKey;
 
+      // UNDO
       if (isCmd && e.key === 'z') {
-        e.preventDefault(); // Stop browser from undoing text input
+        e.preventDefault(); 
         undo();
       }
+      
+      // REDO
       if (isCmd && e.key === 'y') {
         e.preventDefault();
         redo();
+      }
+
+      // COPY
+      if (isCmd && e.key === 'c') {
+        e.preventDefault();
+        await copy();
+      }
+
+      // PASTE
+      if (isCmd && e.key === 'v') {
+        e.preventDefault();
+        await paste();
       }
     };
 
