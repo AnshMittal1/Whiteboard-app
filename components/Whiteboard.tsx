@@ -35,6 +35,13 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
   const redoStack = useRef<any[]>([]);
   const historyLocked = useRef(false); // Prevents "Undo" from recording itself
 
+
+  // --- [NEW] BATCH TRANSACTION REFS ---
+  // Stores actions temporarily while the user is dragging the eraser
+  const historyTransaction = useRef<any[]>([]); 
+  // Flag to tell saveAction: "Don't save to main stack yet, save to transaction buffer"
+  const isTransactionActive = useRef(false);
+
   // --- NEW REF FOR CLIPBOARD ---
   const clipboard = useRef<any>(null);
 
@@ -289,14 +296,21 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
   useEffect(() => {
     if (!canvasEl.current) return;
 
+    
 
     // --- HISTORY HELPERS ---
 
     const saveAction = (action: any) => {
       if (historyLocked.current) return;
+
+      // [NEW LOGIC] Check if we are in the middle of a batch (drag) operation
+      if (isTransactionActive.current) {
+        historyTransaction.current.push(action);
+        return;
+      }
       
+      // [EXISTING LOGIC]
       undoStack.current.push(action);
-      // New action clears the "Redo" future
       if (redoStack.current.length > 0) {
         redoStack.current = [];
       }
@@ -304,33 +318,40 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
 
     // --- UNDO / REDO LOGIC ---
 
-    const applyAction = (action: any, isUndo: boolean) => {
-      historyLocked.current = true; // LOCK: Stop listening to events
-
+    // [NEW HELPER] Handles the logic for a single item
+    const applySingleAction = (action: any, isUndo: boolean) => {
       const obj = action.object;
-
       if (action.type === 'add') {
-        // If we added it, UNDO means remove it. REDO means add it back.
         if (isUndo) canvas.remove(obj);
         else canvas.add(obj);
       } 
       else if (action.type === 'remove') {
-        // If we removed it, UNDO means add it back.
         if (isUndo) canvas.add(obj);
         else canvas.remove(obj);
       } 
       else if (action.type === 'modify') {
-        // Apply the Before/After state
         const state = isUndo ? action.before : action.after;
-        
         obj.set(state);
         obj.setCoords();
-        
-        // IMPORTANT: Manually update Spatial Index since 'modified' event won't fire
-        updateIndex(obj); 
+        updateIndex(obj);
+      }
+    };
+
+    // [UPDATED] Main Apply Action
+    const applyAction = (action: any, isUndo: boolean) => {
+      historyLocked.current = true; // Lock history
+
+      if (action.type === 'batch') {
+        // [NEW] Handle Batch
+        // If undoing, reverse the array to undo the last deletion first
+        const actionsToProcess = isUndo ? [...action.actions].reverse() : action.actions;
+        actionsToProcess.forEach((subAction: any) => applySingleAction(subAction, isUndo));
+      } else {
+        // Handle Standard Single Action
+        applySingleAction(action, isUndo);
       }
 
-      historyLocked.current = false; // UNLOCK
+      historyLocked.current = false; // Unlock
       canvas.requestRenderAll();
     };
 
@@ -445,6 +466,42 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
       ctx.restore();
     });
 
+
+    const eraseObjectsInPath = (pointer: { x: number, y: number }) => {
+      const canvas = canvasInstance.current;
+      if (!canvas) return;
+
+      // Define a small "Eraser Hitbox" (e.g., 10x10 pixels around cursor)
+      const eraserSize = 10;
+      const searchBox = {
+        minX: pointer.x - eraserSize,
+        minY: pointer.y - eraserSize,
+        maxX: pointer.x + eraserSize,
+        maxY: pointer.y + eraserSize
+      };
+
+      // 1. Efficiently find candidates using RBush
+      const results = spatialIndex.current.search(searchBox);
+
+      // 2. Iterate and remove
+      results.forEach((item: any) => {
+        const obj = item.id; // The actual Fabric object
+        
+        // Optional: Add a precise check (e.g., obj.containsPoint) 
+        // For now, the bounding box check from RBush is fast and feels good for a "Block Eraser"
+        
+        // This will trigger 'object:removed', which calls 'saveAction'
+        // Because 'isTransactionActive' is true, it saves to the batch buffer!
+        canvas.remove(obj); 
+      });
+      
+      if (results.length > 0) {
+        canvas.requestRenderAll();
+      }
+    };
+
+
+
     // --- MOUSE EVENT LISTENERS (The "Brain" of the tools) ---
 
     canvas.on('mouse:down', (options) => {
@@ -455,11 +512,11 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
 
       // ERASER LOGIC
       if (tool === 'eraser') {
-        if (options.target) {
-          // If we clicked on an object, remove it
-          canvas.remove(options.target);
-          canvas.requestRenderAll();
-        }
+        isDrawing.current = true; // Flag that we are "dragging"
+        isTransactionActive.current = true; // START BATCH TRANSACTION
+        
+        // Perform one erase immediately (for simple clicks)
+        eraseObjectsInPath(pointer);
         return;
       }
 
@@ -576,7 +633,12 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
 
       const pointer = canvas.getScenePoint(options.e);
 
-      if (tool === 'rectangle' && shape) {
+      if (tool === 'eraser') {
+        eraseObjectsInPath(pointer);
+        return; // Stop here, don't run shape logic
+      }
+
+      else if (tool === 'rectangle' && shape) {
         const start = startPos.current;
 
         // 2. Calculate Geometry
@@ -656,6 +718,26 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
     canvas.on('mouse:up', () => {
       if (isDrawing.current) {
         isDrawing.current = false;
+
+        // [NEW] COMMIT ERASER BATCH
+        if (activeToolRef.current === 'eraser') {
+          isTransactionActive.current = false; // END BATCH
+
+          // If we actually deleted something, save the batch to Undo Stack
+          if (historyTransaction.current.length > 0) {
+            undoStack.current.push({
+              type: 'batch',
+              actions: [...historyTransaction.current] // Create a copy
+            });
+            
+            // Clear the buffer for next time
+            historyTransaction.current = [];
+            // Clear Redo stack since we made a new change
+            redoStack.current = [];
+          }
+          return;
+        }
+
 
         if (activeShape.current) {
           activeShape.current.set({ selectable: true, evented: true });
