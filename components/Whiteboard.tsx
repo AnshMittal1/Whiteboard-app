@@ -372,6 +372,7 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
     // --- SPATIAL INDEX HELPERS ---
 
     const addToIndex = (obj: fabric.Object) => {
+      if (obj.type === 'activeSelection') return;
       const box = obj.getBoundingRect();
       const item = {
         minX: box.left,
@@ -816,7 +817,21 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
       const obj = e.target;
       if (!obj || historyLocked.current) return;
 
-      const currentProps = {
+      // [FIX 3] Handle Group Dragging
+      // If we dragged a group, update the index for all its children immediately
+      if (obj.type === 'activeSelection' && (obj as fabric.ActiveSelection).getObjects) {
+        (obj as fabric.ActiveSelection).getObjects().forEach((child) => {
+          updateIndex(child);
+        });
+      } else {
+        updateIndex(obj);
+      }
+
+      // ... existing history logic ...
+      // (Note: For history, you might want to save the group state or individual states, 
+      // but for fixing the eraser bug, the index update above is what matters)
+      
+       const currentProps = {
         left: obj.left,
         top: obj.top,
         scaleX: obj.scaleX,
@@ -836,6 +851,13 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
       });
     });
 
+    canvas.on('selection:cleared', (e) => {
+      if (e.deselected) {
+        e.deselected.forEach((obj) => {
+          updateIndex(obj);
+        });
+      }
+    });
 
     // Helper: clone a Fabric object robustly (works with callback-style and Promise-style clone APIs)
     const cloneFabricObject = async (obj: fabric.Object): Promise<fabric.Object> => {
