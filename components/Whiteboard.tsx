@@ -4,13 +4,17 @@ import React, { useEffect, useRef } from 'react';
 import * as fabric from 'fabric';
 import { Tool } from '@/app/page';
 import RBush from 'rbush';
+import { ShapeOptions } from '@/types'; // [NEW] Import
+
 
 interface WhiteboardProps {
   activeTool: Tool;
   onToolChange: (tool: Tool) => void;
+  options: ShapeOptions; // [NEW] Add this
+  onOptionsChange: (options: ShapeOptions) => void; // [NEW]
 }
 
-const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
+const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: WhiteboardProps) => {
   const canvasEl = useRef<HTMLCanvasElement>(null);
   const canvasInstance = useRef<fabric.Canvas | null>(null);
   const onToolChangeRef = useRef(onToolChange);
@@ -44,6 +48,11 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
 
   // --- NEW REF FOR CLIPBOARD ---
   const clipboard = useRef<any>(null);
+
+
+  // [NEW] Options Ref (Syncs state for event listeners)
+  const optionsRef = useRef(options);
+
 
 
   // CUSTOM LINE CONTROLS HELPER
@@ -236,6 +245,11 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
     onToolChangeRef.current = onToolChange;
   }, [onToolChange]);
 
+  useEffect(() => {
+    optionsRef.current = options;
+  }, [options]);
+
+
   // --- TOOL SWITCHING LOGIC ---
   useEffect(() => {
     const canvas = canvasInstance.current;
@@ -292,29 +306,72 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
     canvas.requestRenderAll();
   }, [activeTool]);
 
+  // [MOVED] Define this at the top level of the component (not inside useEffect)
+  // so we can call it when property changes happen.
+  const saveAction = (action: any) => {
+    if (historyLocked.current) return;
+
+    if (isTransactionActive.current) {
+      historyTransaction.current.push(action);
+      return;
+    }
+    
+    undoStack.current.push(action);
+    if (redoStack.current.length > 0) {
+      redoStack.current = [];
+    }
+  };
+
+  // [NEW] 1. LIVE EDITING (UI -> Canvas)
+  // When 'options' prop changes (user changes UI), update the active object.
+  useEffect(() => {
+    const canvas = canvasInstance.current;
+    if (!canvas) return;
+
+    const activeObject = canvas.getActiveObject();
+    if (!activeObject) return;
+
+    // We only want to save history if something actually changed.
+    // For simplicity in this MVP, we save on every change. 
+    // (In a real app, you'd debounce this or compare values).
+    
+    // Capture old state for Undo
+    const oldState: any = {};
+    const keys: (keyof ShapeOptions)[] = ['stroke', 'strokeWidth', 'fill', 'opacity', 'fontFamily', 'fontSize'];
+    keys.forEach(k => { if (k in activeObject) oldState[k] = (activeObject as any)[k]; });
+
+    // Apply new style
+    // We filter keys because some tools (like Arrow) might not support 'fill' the same way
+    // but Fabric.js set() is generally safe to pass extra props to.
+    activeObject.set(options);
+
+    // Special Handling: Text needs to re-render specially if font changes
+    if (activeObject.type === 'i-text') {
+      // (activeObject as fabric.IText).initDimensions(); // Optional: helps with font resizing
+    }
+
+    activeObject.setCoords();
+    canvas.requestRenderAll();
+
+    // Save to History
+    saveAction({
+      type: 'modify',
+      object: activeObject,
+      before: oldState,
+      after: options 
+    });
+
+  }, [options]);
+
+
+
   // --- INITIALIZATION ---
   useEffect(() => {
     if (!canvasEl.current) return;
 
     
 
-    // --- HISTORY HELPERS ---
-
-    const saveAction = (action: any) => {
-      if (historyLocked.current) return;
-
-      // [NEW LOGIC] Check if we are in the middle of a batch (drag) operation
-      if (isTransactionActive.current) {
-        historyTransaction.current.push(action);
-        return;
-      }
-      
-      // [EXISTING LOGIC]
-      undoStack.current.push(action);
-      if (redoStack.current.length > 0) {
-        redoStack.current = [];
-      }
-    };
+    
 
     // --- UNDO / REDO LOGIC ---
 
@@ -535,9 +592,10 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
           height: 0,
           originX: 'left',
           originY: 'top',
-          fill: 'transparent',
-          stroke: 'black',
-          strokeWidth: 2,
+          fill: optionsRef.current.fill,
+          stroke: optionsRef.current.stroke,
+          strokeWidth: optionsRef.current.strokeWidth,
+          opacity:optionsRef.current.opacity,
           selectable: false,
           strokeUniform: true,
           objectCaching: false,
@@ -556,8 +614,9 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
         const line = new fabric.Line(
           [startPoint.x, startPoint.y, startPoint.x, startPoint.y],
           {
-            stroke: 'black',
-            strokeWidth: 2,
+            stroke: optionsRef.current.stroke,
+            strokeWidth: optionsRef.current.strokeWidth,
+            opacity:optionsRef.current.opacity,
             selectable: false,
             evented: false,
             originX: 'left',
@@ -582,8 +641,9 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
         const path = new fabric.Path(
           `M ${pointer.x} ${pointer.y} L ${pointer.x} ${pointer.y}`,
           {
-            stroke: 'black',
-            strokeWidth: 2,
+            stroke: optionsRef.current.stroke,
+            strokeWidth: optionsRef.current.strokeWidth,
+            opacity:optionsRef.current.opacity,
             fill: null,
             selectable: false,
             evented: false,
@@ -600,9 +660,9 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
         const text = new fabric.IText('Type here', {
           left: pointer.x,
           top: pointer.y,
-          fontFamily: 'sans-serif',
-          fill: '#000000',
-          fontSize: 20,
+          fontFamily: optionsRef.current.fontFamily,
+          fill: optionsRef.current.fill,
+          fontSize: optionsRef.current.fontSize,
           selectable: true, // Needs to be true so we can type
           evented: true,
           objectCaching: false,
@@ -774,6 +834,39 @@ const Whiteboard = ({ activeTool, onToolChange }: WhiteboardProps) => {
     canvas.on('object:modified', (e) => {
       if (e.target) updateIndex(e.target);
     });
+
+
+
+    // [NEW] 2. SELECTION SYNC (Canvas -> UI)
+    // When user selects an object, update the Properties Panel to match it.
+    const handleSelection = (obj: fabric.Object) => {
+      if (!obj) return;
+
+      const newOptions = {
+        // Fix: Cast 'stroke' and 'fill' to string to satisfy ShapeOptions
+        stroke: (obj.stroke as string) || '#000000',
+        strokeWidth: obj.strokeWidth || 2,
+        fill: (obj.fill as string) || 'transparent',
+        opacity: obj.opacity || 1,
+        fontFamily: (obj as any).fontFamily || 'Arial',
+        fontSize: (obj as any).fontSize || 24,
+      };
+
+      onOptionsChange(newOptions);
+    };
+
+    canvas.on('selection:created', (e) => {
+      if (e.selected && e.selected[0]) {
+        handleSelection(e.selected[0]);
+      }
+    });
+
+    canvas.on('selection:updated', (e) => {
+      if (e.selected && e.selected[0]) {
+        handleSelection(e.selected[0]);
+      }
+    });
+
 
 
 
