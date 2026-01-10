@@ -842,11 +842,20 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     const handleSelection = (obj: fabric.Object) => {
       if (!obj) return;
 
+      const isText = obj.type === 'i-text' || obj.type === 'text';
+
       const newOptions = {
-        // Fix: Cast 'stroke' and 'fill' to string to satisfy ShapeOptions
-        stroke: (obj.stroke as string) || '#000000',
-        strokeWidth: obj.strokeWidth || 2,
-        fill: (obj.fill as string) || 'transparent',
+        // FOR TEXT: The "Stroke" color in UI should control the text's FILL.
+        // FOR SHAPES: The "Stroke" color controls the border.
+        stroke: isText ? '#000000' : ((obj.stroke as string) || '#000000'),
+        
+        // Text usually shouldn't have a border width unless you want that specific effect
+        strokeWidth: isText ? 0 : (obj.strokeWidth || 2),
+
+        // FOR TEXT: The main color is stored in 'fill', not 'stroke'.
+        // We ensure it gets the object's fill color.
+        fill: (obj.fill as string) || '#000000',
+        
         opacity: obj.opacity || 1,
         fontFamily: (obj as any).fontFamily || 'Arial',
         fontSize: (obj as any).fontSize || 24,
