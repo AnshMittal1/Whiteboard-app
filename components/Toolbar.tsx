@@ -8,7 +8,7 @@ import {
   Type, 
   Square 
 } from 'lucide-react';
-// We re-define the type here (or you can import it if you exported it from page.tsx)
+
 import { Tool } from '@/app/page'; 
 
 interface ToolbarProps {

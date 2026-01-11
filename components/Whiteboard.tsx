@@ -4,14 +4,14 @@ import React, { useEffect, useRef } from 'react';
 import * as fabric from 'fabric';
 import { Tool } from '@/app/page';
 import RBush from 'rbush';
-import { ShapeOptions } from '@/types'; // [NEW] Import
+import { ShapeOptions } from '@/types'; 
 
 
 interface WhiteboardProps {
   activeTool: Tool;
   onToolChange: (tool: Tool) => void;
-  options: ShapeOptions; // [NEW] Add this
-  onOptionsChange: (options: ShapeOptions) => void; // [NEW]
+  options: ShapeOptions; 
+  onOptionsChange: (options: ShapeOptions) => void; 
 }
 
 const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: WhiteboardProps) => {
@@ -19,51 +19,43 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
   const canvasInstance = useRef<fabric.Canvas | null>(null);
   const onToolChangeRef = useRef(onToolChange);
 
-  // 1. STATE SYNC REF
-  // We use this to access the current tool inside Fabric event listeners
-  // without re-binding the listeners on every render.
+  
   const activeToolRef = useRef(activeTool);
 
-  // --- NEW REFS FOR SHAPE DRAWING ---
-  const isDrawing = useRef(false); // Are we currently dragging?
-  const startPos = useRef({ x: 0, y: 0 }); // Where did we click?
-  const activeShape = useRef<fabric.Object | null>(null); // The shape being resized
+  
+  const isDrawing = useRef(false); 
+  const startPos = useRef({ x: 0, y: 0 }); 
+  const activeShape = useRef<fabric.Object | null>(null); 
 
-  // SPATIAL INDEX REFS
+  
   const spatialIndex = useRef(new RBush());
   const objectMap = useRef(new Map<fabric.Object, any>());
 
 
-  // --- HISTORY REFS ---
+ 
   const undoStack = useRef<any[]>([]);
   const redoStack = useRef<any[]>([]);
-  const historyLocked = useRef(false); // Prevents "Undo" from recording itself
+  const historyLocked = useRef(false); 
 
 
-  // --- [NEW] BATCH TRANSACTION REFS ---
-  // Stores actions temporarily while the user is dragging the eraser
+  
   const historyTransaction = useRef<any[]>([]); 
-  // Flag to tell saveAction: "Don't save to main stack yet, save to transaction buffer"
   const isTransactionActive = useRef(false);
 
-  // --- NEW REF FOR CLIPBOARD ---
   const clipboard = useRef<any>(null);
 
 
-  // [NEW] Options Ref (Syncs state for event listeners)
   const optionsRef = useRef(options);
 
 
 
-  // CUSTOM LINE CONTROLS HELPER
-  // CUSTOM LINE CONTROLS HELPER
+
   const configureLineControls = (line: fabric.Line) => {
     line.setControlsVisibility({
       tl: false, tr: false, bl: false, br: false,
       ml: false, mt: false, mr: false, mb: false, mtr: false,
     });
 
-    // 1. Logic Helper: World Coordinates (Grid)
     const getWorldPosition = (key: 'p1' | 'p2', fabricObject: fabric.Line) => {
       const points = fabricObject.calcLinePoints();
       const localPoint = key === 'p1' 
@@ -76,11 +68,10 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       );
     };
 
-    // 2. Update Handler (Logic uses World Coordinates)
     const moveEnd = (key: 'p1' | 'p2', eventData: any, transformData: any, x: number, y: number) => {
       const targetLine = transformData.target as fabric.Line;
       const staticPoint = getWorldPosition(key === 'p1' ? 'p2' : 'p1', targetLine);
-      const newPoint = { x, y }; // These x,y come from mouse event (World Coords)
+      const newPoint = { x, y }; 
       
       const newCoords = key === 'p1' 
         ? { x1: newPoint.x, y1: newPoint.y, x2: staticPoint.x, y2: staticPoint.y }
@@ -92,21 +83,17 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       return true;
     };
 
-    // 3. Render Helper (Visuals)
-    // We move the "Screen" conversion inside the render function where it belongs
+    
     const drawDot = (ctx: CanvasRenderingContext2D, left: number, top: number, style: any, fabricObject: fabric.Object) => {
-        // We calculate the screen position JUST IN TIME for drawing
         const canvas = fabricObject.canvas;
         if (!canvas) return;
 
-        // "left" and "top" passed here are World Coordinates because positionHandler returns World
         const point = new fabric.Point(left, top);
         const screenPoint = fabric.util.transformPoint(point, canvas.viewportTransform || [1,0,0,1,0,0]);
 
         ctx.save();
         ctx.fillStyle = '#2196F3';
         ctx.beginPath();
-        // Use the calculated screen point
         ctx.arc(screenPoint.x, screenPoint.y, 6, 0, 2 * Math.PI);
         ctx.fill();
         ctx.strokeStyle = '#fff';
@@ -115,18 +102,15 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         ctx.restore();
     };
 
-    // 4. Assign Controls
     line.controls.startPoint = new fabric.Control({
       x: -0.5, y: -0.5, cursorStyle: 'crosshair',
-      // FIX: Return WORLD position, not Screen position
       positionHandler: (dim, finalMatrix, fabricObject) => getWorldPosition('p1', fabricObject as fabric.Line),
       actionHandler: (e, data, x, y) => moveEnd('p1', e, data, x, y),
-      render: drawDot, // Use our updated renderer
+      render: drawDot, 
     });
 
     line.controls.endPoint = new fabric.Control({
       x: 0.5, y: 0.5, cursorStyle: 'crosshair',
-      // FIX: Return WORLD position
       positionHandler: (dim, finalMatrix, fabricObject) => getWorldPosition('p2', fabricObject as fabric.Line),
       actionHandler: (e, data, x, y) => moveEnd('p2', e, data, x, y),
       render: drawDot,
@@ -141,13 +125,11 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     const dy = end.y - start.y;
     const angle = Math.atan2(dy, dx);
     const headLength = 15;
-    const arrowAngle = Math.PI / 6; // 30 degrees
-    // Calculate Wing Tips
+    const arrowAngle = Math.PI / 6; 
     const x1 = end.x - headLength * Math.cos(angle - arrowAngle);
     const y1 = end.y - headLength * Math.sin(angle - arrowAngle);
     const x2 = end.x - headLength * Math.cos(angle + arrowAngle);
     const y2 = end.y - headLength * Math.sin(angle + arrowAngle);
-    // Path Data: Start -> Shaft -> Tip -> Wing 1 -> Tip -> Wing 2
     return `M ${start.x} ${start.y} L ${end.x} ${end.y} M ${end.x} ${end.y} L ${x1} ${y1} M ${end.x} ${end.y} L ${x2} ${y2}`;
   };
 
@@ -157,12 +139,9 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       ml: false, mt: false, mr: false, mb: false, mtr: false,
     });
 
-    // ... (Keep type PathCommand and getArrowWorldPosition exactly as they are) ...
-    // ... (They are already correct) ...
 
     type PathCommand = ['M' | 'L', number, number] | ['M' | 'L', number, number, ...any[]];
     const getArrowWorldPosition = (key: 'p1' | 'p2', fabricObject: fabric.Path) => {
-        // ... (Keep your existing code for this function) ...
         const path = fabricObject.path as PathCommand[];
         const pathOffset = fabricObject.pathOffset; 
         if (!Array.isArray(path) || path.length < 2) return new fabric.Point(0, 0);
@@ -173,12 +152,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         return fabric.util.transformPoint(localPoint, fabricObject.calcTransformMatrix());
     };
 
-    // ❌ DELETED: const getScreenPosition = ... (We don't need it)
-
-    // ... (Keep moveArrowEnd exactly as is) ...
     const moveArrowEnd = (key: 'p1' | 'p2', eventData: any, transformData: any, x: number, y: number) => {
-       // ... (Your existing logic is fine here) ...
-       // ... Just paste your existing moveArrowEnd code ...
        const target = transformData.target as fabric.Path;
        if (!transformData.dragAnchor) {
          const staticKey = key === 'p1' ? 'p2' : 'p1';
@@ -199,11 +173,9 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
        return true;
     };
 
-    // UPDATE RENDERER
     const drawDot = (ctx: CanvasRenderingContext2D, left: number, top: number, style: any, fabricObject: fabric.Object) => {
         const canvas = fabricObject.canvas;
         if (!canvas) return;
-        // Transform World -> Screen just for drawing
         const point = new fabric.Point(left, top);
         const screenPoint = fabric.util.transformPoint(point, canvas.viewportTransform || [1,0,0,1,0,0]);
         
@@ -218,10 +190,8 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         ctx.restore();
     };
 
-    // ASSIGN CONTROLS
     arrow.controls.startPoint = new fabric.Control({
       x: -0.5, y: -0.5, cursorStyle: 'crosshair',
-      // FIX: Return WORLD position
       positionHandler: (dim, finalMatrix, obj) => getArrowWorldPosition('p1', obj as fabric.Path),
       actionHandler: (e, data, x, y) => moveArrowEnd('p1', e, data, x, y),
       render: drawDot,
@@ -229,14 +199,12 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
     arrow.controls.endPoint = new fabric.Control({
       x: 0.5, y: 0.5, cursorStyle: 'crosshair',
-      // FIX: Return WORLD position
       positionHandler: (dim, finalMatrix, obj) => getArrowWorldPosition('p2', obj as fabric.Path),
       actionHandler: (e, data, x, y) => moveArrowEnd('p2', e, data, x, y),
       render: drawDot,
     });
   };
 
-  // Sync the Ref whenever the Prop changes
   useEffect(() => {
     activeToolRef.current = activeTool;
   }, [activeTool]);
@@ -250,34 +218,30 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
   }, [options]);
 
 
-  // --- TOOL SWITCHING LOGIC ---
   useEffect(() => {
     const canvas = canvasInstance.current;
     if (!canvas) return;
 
     if (isDrawing.current && activeShape.current) {
-      canvas.remove(activeShape.current); // Delete the ghost shape
-      activeShape.current = null; // Clear the ref
-      isDrawing.current = false; // Reset the flag
-      canvas.requestRenderAll(); // Clear the screen immediately
+      canvas.remove(activeShape.current); 
+      activeShape.current = null; 
+      isDrawing.current = false; 
+      canvas.requestRenderAll(); 
     }
 
-    // Reset defaults first
     canvas.isDrawingMode = false;
     canvas.selection = false;
 
     canvas.discardActiveObject();
 
-    // Iterate over all objects to reset their selectability
-    // (We lock objects when using Pencil/Eraser so you don't accidentally drag them)
     canvas.getObjects().forEach((obj) => {
       obj.selectable = activeTool === 'selection';
-      obj.evented = true; // Always let them receive events (so we can click to erase)
+      obj.evented = true; 
     });
 
     switch (activeTool) {
       case 'selection':
-        canvas.selection = true; // Enable the blue drag-selection box
+        canvas.selection = true;
         canvas.defaultCursor = 'default';
         break;
 
@@ -291,14 +255,14 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
       case 'eraser':
         canvas.selection = false;
-        canvas.defaultCursor = 'not-allowed'; // Visual cue that you are in delete mode
+        canvas.defaultCursor = 'not-allowed'; 
         break;
 
       case 'rectangle':
       case 'line':
       case 'arrow':
       case 'text':
-        // (Placeholder for next steps)
+       
         canvas.defaultCursor = 'crosshair';
         break;
     }
@@ -306,8 +270,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     canvas.requestRenderAll();
   }, [activeTool]);
 
-  // [MOVED] Define this at the top level of the component (not inside useEffect)
-  // so we can call it when property changes happen.
+ 
   const saveAction = (action: any) => {
     if (historyLocked.current) return;
 
@@ -322,8 +285,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     }
   };
 
-  // [NEW] 1. LIVE EDITING (UI -> Canvas)
-  // When 'options' prop changes (user changes UI), update the active object.
+  
   useEffect(() => {
     const canvas = canvasInstance.current;
     if (!canvas) return;
@@ -331,29 +293,20 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     const activeObject = canvas.getActiveObject();
     if (!activeObject) return;
 
-    // We only want to save history if something actually changed.
-    // For simplicity in this MVP, we save on every change. 
-    // (In a real app, you'd debounce this or compare values).
     
-    // Capture old state for Undo
     const oldState: any = {};
     const keys: (keyof ShapeOptions)[] = ['stroke', 'strokeWidth', 'fill', 'opacity', 'fontFamily', 'fontSize'];
     keys.forEach(k => { if (k in activeObject) oldState[k] = (activeObject as any)[k]; });
 
-    // Apply new style
-    // We filter keys because some tools (like Arrow) might not support 'fill' the same way
-    // but Fabric.js set() is generally safe to pass extra props to.
+    
     activeObject.set(options);
 
-    // Special Handling: Text needs to re-render specially if font changes
-    if (activeObject.type === 'i-text') {
-      // (activeObject as fabric.IText).initDimensions(); // Optional: helps with font resizing
-    }
+    
+    
 
     activeObject.setCoords();
     canvas.requestRenderAll();
 
-    // Save to History
     saveAction({
       type: 'modify',
       object: activeObject,
@@ -365,7 +318,6 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
 
 
-  // --- INITIALIZATION ---
   useEffect(() => {
     if (!canvasEl.current) return;
 
@@ -373,9 +325,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
     
 
-    // --- UNDO / REDO LOGIC ---
-
-    // [NEW HELPER] Handles the logic for a single item
+    
     const applySingleAction = (action: any, isUndo: boolean) => {
       const obj = action.object;
       if (action.type === 'add') {
@@ -394,21 +344,20 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       }
     };
 
-    // [UPDATED] Main Apply Action
+   
     const applyAction = (action: any, isUndo: boolean) => {
-      historyLocked.current = true; // Lock history
+      historyLocked.current = true; 
 
       if (action.type === 'batch') {
-        // [NEW] Handle Batch
-        // If undoing, reverse the array to undo the last deletion first
+        
         const actionsToProcess = isUndo ? [...action.actions].reverse() : action.actions;
         actionsToProcess.forEach((subAction: any) => applySingleAction(subAction, isUndo));
       } else {
-        // Handle Standard Single Action
+        
         applySingleAction(action, isUndo);
       }
 
-      historyLocked.current = false; // Unlock
+      historyLocked.current = false;
       canvas.requestRenderAll();
     };
 
@@ -426,7 +375,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       applyAction(action, false);
     };
 
-    // --- SPATIAL INDEX HELPERS ---
+    
 
     const addToIndex = (obj: fabric.Object) => {
       if (obj.type === 'activeSelection') return;
@@ -436,7 +385,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         minY: box.top,
         maxX: box.left + box.width,
         maxY: box.top + box.height,
-        id: obj, // Store reference to actual object
+        id: obj, 
       };
 
       spatialIndex.current.insert(item);
@@ -452,7 +401,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     };
 
     const updateIndex = (obj: fabric.Object) => {
-      // Fabric objects change size/position, so we must remove old and add new
+      
       removeFromIndex(obj);
       addToIndex(obj);
     };
@@ -460,13 +409,13 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     const canvas = new fabric.Canvas(canvasEl.current, {
       width: window.innerWidth,
       height: window.innerHeight,
-      selection: true, // Default
+      selection: true, 
       enableRetinaScaling: true,
       renderOnAddRemove: false,
     });
     canvasInstance.current = canvas;
 
-    // --- PROCEDURAL INFINITE GRID (Method 3) ---
+    
     const gridSize = 50;
     const gridColor = '#e5e5e5';
 
@@ -479,39 +428,33 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       const width = canvas.width;
       const height = canvas.height;
 
-      // 1. Define base size
+      
       const baseGridSize = 50;
 
-      // 2. Adaptive Sizing (The Fix)
-      // Calculate how big the grid square looks on the actual screen
+      
       let visualGridSize = baseGridSize * zoom;
 
-      // If the grid gets too tiny (zoomed out), double the spacing until it's readable.
-      // This prevents the loop from running 5000+ times per frame at low zoom.
-      // 15px is a good threshold for "too small to see".
+
       while (visualGridSize < 15) {
         visualGridSize *= 2;
       }
 
-      // 3. Calculate Pan Offset
-      // We use the NEW visual size to align the grid
+      
       const offsetX = vpt[4] % visualGridSize;
       const offsetY = vpt[5] % visualGridSize;
 
       ctx.save();
       ctx.beginPath();
 
-      // 4. Draw Vertical Lines
-      // Start slightly off-screen to ensure continuous lines during pan
+      
       for (let x = offsetX; x < width; x += visualGridSize) {
-        // "Math.round - 0.5" aligns the line to the pixel grid for crisp 1px lines
-        // preventing the "blurry line" effect common in canvas.
+        
         const snapX = Math.round(x) - 0.5;
         ctx.moveTo(snapX, 0);
         ctx.lineTo(snapX, height);
       }
 
-      // 5. Draw Horizontal Lines
+     
       for (let y = offsetY; y < height; y += visualGridSize) {
         const snapY = Math.round(y) - 0.5;
         ctx.moveTo(0, snapY);
@@ -529,7 +472,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       const canvas = canvasInstance.current;
       if (!canvas) return;
 
-      // Define a small "Eraser Hitbox" (e.g., 10x10 pixels around cursor)
+
       const eraserSize = 10;
       const searchBox = {
         minX: pointer.x - eraserSize,
@@ -538,18 +481,14 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         maxY: pointer.y + eraserSize
       };
 
-      // 1. Efficiently find candidates using RBush
+      
       const results = spatialIndex.current.search(searchBox);
 
-      // 2. Iterate and remove
+      
       results.forEach((item: any) => {
-        const obj = item.id; // The actual Fabric object
+        const obj = item.id;
         
-        // Optional: Add a precise check (e.g., obj.containsPoint) 
-        // For now, the bounding box check from RBush is fast and feels good for a "Block Eraser"
-        
-        // This will trigger 'object:removed', which calls 'saveAction'
-        // Because 'isTransactionActive' is true, it saves to the batch buffer!
+
         canvas.remove(obj); 
       });
       
@@ -560,28 +499,25 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
 
 
-    // --- MOUSE EVENT LISTENERS (The "Brain" of the tools) ---
+   
 
     canvas.on('mouse:down', (options) => {
-      // if (!isDrawing.current) return;
+     
 
-      const tool = activeToolRef.current; // Get the current tool safely
-      const pointer = canvas.getScenePoint(options.e); // Get absolute world coordinates
+      const tool = activeToolRef.current;
+      const pointer = canvas.getScenePoint(options.e);
 
-      // ERASER LOGIC
+     
       if (tool === 'eraser') {
-        isDrawing.current = true; // Flag that we are "dragging"
-        isTransactionActive.current = true; // START BATCH TRANSACTION
+        isDrawing.current = true;
+        isTransactionActive.current = true; 
         
-        // Perform one erase immediately (for simple clicks)
+      
         eraseObjectsInPath(pointer);
         return;
       }
 
-      // SELECTION LOGIC
-      // (Handled automatically by Fabric if isDrawingMode is false)
-
-      // Rectangle logic
+     
       else if (tool === 'rectangle') {
         isDrawing.current = true;
         startPos.current = { x: pointer.x, y: pointer.y };
@@ -605,7 +541,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         activeShape.current = rect;
       }
 
-      // Line Tool Logic
+     
       else if (tool === 'line') {
         isDrawing.current = true;
         const startPoint = { x: pointer.x, y: pointer.y };
@@ -623,11 +559,11 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
             originY: 'top',
             objectCaching: false,
             strokeUniform: true,
-            hasControls: true, // CHANGED: Enable controls
+            hasControls: true, 
           }
         );
 
-        // Apply custom controls immediately
+       
         configureLineControls(line);
 
         canvas.add(line);
@@ -636,8 +572,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         isDrawing.current = true;
         startPos.current = { x: pointer.x, y: pointer.y };
 
-        // Create initial "dot" arrow
-        // We use absolute coordinates directly because we are going to recreate it anyway
+        
         const path = new fabric.Path(
           `M ${pointer.x} ${pointer.y} L ${pointer.x} ${pointer.y}`,
           {
@@ -656,30 +591,28 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         canvas.add(path);
         activeShape.current = path;
       } else if (tool === 'text') {
-        // 1. Create Interactive Text Object
+        
         const text = new fabric.IText('Type here', {
           left: pointer.x,
           top: pointer.y,
           fontFamily: optionsRef.current.fontFamily,
           fill: optionsRef.current.fill,
           fontSize: optionsRef.current.fontSize,
-          selectable: true, // Needs to be true so we can type
+          selectable: true, 
           evented: true,
           objectCaching: false,
           strokeUniform: true,
         });
 
-        // 2. Add to Canvas
+        
         canvas.add(text);
 
-        // 3. Enter Editing Mode Immediately
+       
         canvas.setActiveObject(text);
-        text.enterEditing(); // Enters "Type Mode"
-        text.selectAll(); // Selects "Type here" so the first keypress overwrites it
+        text.enterEditing(); 
+        text.selectAll(); 
 
-        // 4. Auto-Switch back to Selection
-        // This allows the user to click outside the box to finish editing
-        // without creating a new text object.
+        
         onToolChangeRef.current('selection');
 
         canvas.requestRenderAll();
@@ -687,7 +620,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     });
 
     canvas.on('mouse:move', (options) => {
-      // 1. Safety Checks
+     
       if (!isDrawing.current) return;
       const tool = activeToolRef.current;
       const shape = activeShape.current;
@@ -696,82 +629,77 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
       if (tool === 'eraser') {
         eraseObjectsInPath(pointer);
-        return; // Stop here, don't run shape logic
+        return; 
       }
 
       else if (tool === 'rectangle' && shape) {
         const start = startPos.current;
 
-        // 2. Calculate Geometry
-        // "Math.min" ensures 'left' is always the top-left-most coordinate
+       
         const left = Math.min(pointer.x, start.x);
         const top = Math.min(pointer.y, start.y);
 
-        // "Math.abs" ensures width is always positive
+        
         const width = Math.abs(pointer.x - start.x);
         const height = Math.abs(pointer.y - start.y);
 
-        // 3. Update Shape
+       
         shape.set({
           left: left,
           top: top,
           width: width,
           height: height,
-          // explicit origin ensures coordinates are strictly respected
+          
           originX: 'left',
           originY: 'top',
         });
 
-        // 4. Force Update
+       
         canvas.requestRenderAll();
       } else if (tool === 'line' && shape) {
-        // Cast shape to Line so TypeScript knows about .set({ x2, y2 })
+        
         const line = shape as fabric.Line;
 
-        // Standard Fabric Line update
+        
         line.set({
           x2: pointer.x,
           y2: pointer.y,
         });
 
-        // Recalculate dimensions so selection box matches visual line
+       
         line.setCoords();
 
         canvas.requestRenderAll();
       } else if (tool === 'arrow' && shape) {
         const start = startPos.current;
 
-        // 1. Calculate the new Path Data string
+        
         const pathData = getArrowPath(start, { x: pointer.x, y: pointer.y });
 
-        // 2. Create a lightweight "Ghost" path to calculate geometry
-        // We do not add this to the canvas. It exists only in memory for a microsecond.
-        // We pass strokeWidth to ensure the bounding box calculation matches the real object.
+        
         const tempPath = new fabric.Path(pathData, {
           strokeWidth: shape.strokeWidth,
           strokeLineCap: shape.strokeLineCap,
         });
 
-        // 3. Calculate the new Bounding Box
+       
         const dims = tempPath.getBoundingRect();
 
-        // 4. Mutate the EXISTING object (The Fix)
-        // Instead of removing/adding, we update the properties of the living object.
-        // We must manually update width/height/left/top/pathOffset to match the new geometry.
+       
         (shape as fabric.Path).set({
-          path: tempPath.path, // Update the drawing instructions
-          width: tempPath.width, // Update the width
-          height: tempPath.height, // Update the height
-          left: dims.left, // Update world position X
-          top: dims.top, // Update world position Y
-          pathOffset: tempPath.pathOffset, // Update internal center offset
-          originX: 'left', // Ensure anchor is top-left
+          path: tempPath.path, 
+          width: tempPath.width, 
+          height: tempPath.height,
+          left: dims.left, 
+          top: dims.top,
+          pathOffset: tempPath.pathOffset, 
+          originX: 'left',
           originY: 'top',
         });
 
         (shape as fabric.Path).setCoords();
 
-        // 5. Render
+        
         canvas.requestRenderAll();
       }
     });
@@ -780,20 +708,20 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       if (isDrawing.current) {
         isDrawing.current = false;
 
-        // [NEW] COMMIT ERASER BATCH
+        
         if (activeToolRef.current === 'eraser') {
-          isTransactionActive.current = false; // END BATCH
+          isTransactionActive.current = false; 
 
-          // If we actually deleted something, save the batch to Undo Stack
+          
           if (historyTransaction.current.length > 0) {
             undoStack.current.push({
               type: 'batch',
-              actions: [...historyTransaction.current] // Create a copy
+              actions: [...historyTransaction.current]
             });
             
-            // Clear the buffer for next time
+            
             historyTransaction.current = [];
-            // Clear Redo stack since we made a new change
+            
             redoStack.current = [];
           }
           return;
@@ -803,11 +731,11 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         if (activeShape.current) {
           activeShape.current.set({ selectable: true, evented: true });
 
-          // If it's a line, reapply custom controls
+         
           if (activeShape.current.type === 'line') {
             configureLineControls(activeShape.current as fabric.Line);
           } else if (activeShape.current.type === 'path') {
-            // Note: fabric.Path usually has type 'path'
+           
             configureArrowControls(activeShape.current as fabric.Path);
           }
 
@@ -824,7 +752,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       }
     });
 
-    // --- SYNC INDEX WITH CANVAS ---
+  
     canvas.on('object:added', (e) => {
       if (e.target) addToIndex(e.target);
     });
@@ -837,23 +765,20 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
 
 
-    // [NEW] 2. SELECTION SYNC (Canvas -> UI)
-    // When user selects an object, update the Properties Panel to match it.
+    
     const handleSelection = (obj: fabric.Object) => {
       if (!obj) return;
 
       const isText = obj.type === 'i-text' || obj.type === 'text';
 
       const newOptions = {
-        // FOR TEXT: The "Stroke" color in UI should control the text's FILL.
-        // FOR SHAPES: The "Stroke" color controls the border.
+        
         stroke: isText ? '#000000' : ((obj.stroke as string) || '#000000'),
         
-        // Text usually shouldn't have a border width unless you want that specific effect
+        
         strokeWidth: isText ? 0 : (obj.strokeWidth || 2),
 
-        // FOR TEXT: The main color is stored in 'fill', not 'stroke'.
-        // We ensure it gets the object's fill color.
+       
         fill: (obj.fill as string) || '#000000',
         
         opacity: obj.opacity || 1,
@@ -879,9 +804,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
 
 
-    // --- HISTORY RECORDERS ---
     
-    // 1. ADD / REMOVE
     canvas.on('object:added', (e) => {
       if (e.target && !historyLocked.current) {
         saveAction({ type: 'add', object: e.target });
@@ -894,14 +817,13 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       }
     });
 
-    // 2. MODIFICATION SNAPSHOTS
-    // We need to capture state BEFORE the drag starts
+    
     let transformStartProps: any = {};
 
     canvas.on('before:transform', (e) => {
       const t = e.transform;
       if (!t || !t.target) return;
-      // Capture the essential properties
+      
       transformStartProps = {
         left: t.target.left,
         top: t.target.top,
@@ -910,7 +832,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         angle: t.target.angle,
         width: t.target.width,
         height: t.target.height,
-        path: (t.target as fabric.Path).path, // Capture path for arrows
+        path: (t.target as fabric.Path).path,
         pathOffset: (t.target as fabric.Path).pathOffset,
       };
     });
@@ -919,8 +841,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       const obj = e.target;
       if (!obj || historyLocked.current) return;
 
-      // [FIX 3] Handle Group Dragging
-      // If we dragged a group, update the index for all its children immediately
+      
       if (obj.type === 'activeSelection' && (obj as fabric.ActiveSelection).getObjects) {
         (obj as fabric.ActiveSelection).getObjects().forEach((child) => {
           updateIndex(child);
@@ -929,9 +850,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         updateIndex(obj);
       }
 
-      // ... existing history logic ...
-      // (Note: For history, you might want to save the group state or individual states, 
-      // but for fixing the eraser bug, the index update above is what matters)
+      
       
        const currentProps = {
         left: obj.left,
@@ -961,22 +880,22 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       }
     });
 
-    // Helper: clone a Fabric object robustly (works with callback-style and Promise-style clone APIs)
+    
     const cloneFabricObject = async (obj: fabric.Object): Promise<fabric.Object> => {
-      // Try Promise-style clone (Fabric v6+ may return a Promise)
+      
       try {
-        // Some Fabric versions return a Promise from clone()
+        
         const maybePromise = (obj as any).clone();
-        // If it returned a thenable / Promise, await it:
+       
         if (maybePromise && typeof maybePromise.then === 'function') {
           const cloned = await maybePromise;
           if (cloned) return cloned;
         }
       } catch (e) {
-        // ignore - we'll try the callback fallback
+        
       }
 
-      // Callback-style fallback: obj.clone(cb)
+      
       return await new Promise<fabric.Object>((resolve) => {
         (obj as any).clone((cloned: fabric.Object) => {
           resolve(cloned);
@@ -984,15 +903,15 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       });
     };
 
-    // Helper: add an object to canvas, reapply controls, set coords, and ensure RBush index is updated
+    
     const addAndIndex = (obj: fabric.Object) => {
-      // Make sure the object is interactive and visible
+     
       obj.set({
         evented: true,
         selectable: true,
       });
 
-      // Small visual offset so paste is visible as a duplicate
+      
       if (typeof obj.left === 'number' && typeof obj.top === 'number') {
         obj.set({
           left: obj.left + 20,
@@ -1000,29 +919,28 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         });
       }
 
-      // Add to canvas (this will ensure object belongs to the canvas)
+      
       canvas.add(obj);
 
-      // Re-apply any custom controls for special object types
+      
       if (obj.type === 'line') configureLineControls(obj as fabric.Line);
       else if (obj.type === 'path') configureArrowControls(obj as fabric.Path);
 
-      // Force geometry recalculation
+      
       obj.setCoords();
 
-      // Immediately update our RBush index (prevents culling race)
+      
       updateIndex(obj);
     };
 
 
 
-    // --- COPY & PASTE LOGIC ---
+    
 
     const copy = async () => {
       const activeObject = canvas.getActiveObject();
       if (!activeObject) return;
-      // Clone the object. In Fabric v6+, this is async.
-      // We explicitly ask to include specific properties if needed.
+      
       const cloned = await activeObject.clone(['id']);
       clipboard.current = cloned;
     };
@@ -1030,60 +948,59 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     const paste = async () => {
       if (!clipboard.current) return;
 
-      // If clipboard is an ActiveSelection (multi-object)
+      
       const isActiveSelection =
         clipboard.current.type === 'activeSelection' ||
         (clipboard.current.getObjects && typeof clipboard.current.getObjects === 'function');
 
-      // NEW: if it's a multi-object selection, clone each object individually
+      
       if (isActiveSelection) {
-        // Get the source objects from the clipboard group/selection
+        
         const sourceObjects = clipboard.current.getObjects
           ? clipboard.current.getObjects()
           : (clipboard.current._objects || []);
 
         const pastedObjects: fabric.Object[] = [];
 
-        // Clone each object individually (avoids group-relative transform bugs)
+        
         for (const src of sourceObjects) {
           const cloned = await cloneFabricObject(src);
 
-          // Try to base pasted position on the source object's bounding rect (world coords)
-          // getBoundingRect(true) uses object's transform; works when src was on canvas
+          
           try {
-            const bbox = src.getBoundingRect(true); // true = absolute coords
+            const bbox = src.getBoundingRect(true); 
             cloned.set({
               left: (typeof bbox.left === 'number' ? bbox.left : (src.left ?? 0)) + 20,
               top:  (typeof bbox.top === 'number'  ? bbox.top  : (src.top  ?? 0)) + 20,
             });
           } catch {
-            // fallback - use src.left/top if bbox fails
+            
             cloned.set({
               left: (src.left ?? 0) + 20,
               top:  (src.top  ?? 0) + 20,
             });
           }
 
-          // Disconnect cloned from any original group/canvas
+          
           cloned.canvas = undefined as unknown as fabric.Canvas;
 
           pastedObjects.push(cloned);
         }
 
-        // Add each cloned object to the canvas and update index synchronously
+        
         pastedObjects.forEach((p) => addAndIndex(p));
 
-        // Create a new ActiveSelection from the freshly added objects and select them
+        
         const newSelection = new fabric.ActiveSelection(pastedObjects, { canvas: canvas });
         canvas.setActiveObject(newSelection);
 
-        // Make sure culling/visibility is correct now that RBush is up-to-date
+        
         updateVisibleObjects();
         canvas.requestRenderAll();
         return;
       }
 
-      // --- SINGLE-OBJECT paste (unchanged, but included for completeness) ---
+      
       const clonedObj = await clipboard.current.clone(['id']);
       canvas.discardActiveObject();
       clonedObj.set({
@@ -1093,7 +1010,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       });
 
       if (clonedObj.type === 'activeSelection') {
-        // If Fabric returned an activeSelection, add each object individually
+        
         clonedObj.canvas = canvas;
         clonedObj.forEachObject((obj: any) => {
           canvas.add(obj);
@@ -1121,31 +1038,30 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
 
 
-    // --- KEYBOARD LISTENERS ---
-    // --- KEYBOARD LISTENERS ---
+    
     const handleKeyDown = async (e: KeyboardEvent) => {
-      // Check for Ctrl (Windows) or Meta (Mac)
+      
       const isCmd = e.ctrlKey || e.metaKey;
 
-      // UNDO
+      
       if (isCmd && e.key === 'z') {
         e.preventDefault(); 
         undo();
       }
       
-      // REDO
+      
       if (isCmd && e.key === 'y') {
         e.preventDefault();
         redo();
       }
 
-      // COPY
+      
       if (isCmd && e.key === 'c') {
         e.preventDefault();
         await copy();
       }
 
-      // PASTE
+      
       if (isCmd && e.key === 'v') {
         e.preventDefault();
         await paste();
@@ -1157,9 +1073,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
 
 
-    // --- STANDARD CANVAS FEATURES (Zoom, Pan, Cull) ---
-
-    // --- OPTIMIZED CULLING (RBUSH) ---
+    
     const updateVisibleObjects = () => {
       const canvas = canvasInstance.current;
       if (!canvas) return;
@@ -1167,8 +1081,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       const vpt = canvas.viewportTransform;
       if (!vpt) return;
 
-      // 1. Calculate World Viewport
-      // Invert the transform to find coordinates in "World Space"
+      
       const inv = fabric.util.invertTransform(vpt);
       const tl = fabric.util.transformPoint({ x: 0, y: 0 }, inv);
       const br = fabric.util.transformPoint(
@@ -1176,7 +1089,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         inv
       );
 
-      // 2. Query the Index (Fast!)
+      
       const results = spatialIndex.current.search({
         minX: tl.x,
         minY: tl.y,
@@ -1184,15 +1097,14 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         maxY: br.y,
       });
 
-      // 3. Update Visibility
-      // Use a Set for O(1) lookups
+     
       const visibleObjects = new Set(results.map((item: any) => item.id));
       const objects = canvas.getObjects();
 
       let hasChanges = false;
 
       objects.forEach((obj) => {
-        // Fast boolean check instead of heavy matrix math
+        
         const shouldBeVisible = visibleObjects.has(obj);
 
         if (obj.visible !== shouldBeVisible) {
@@ -1211,11 +1123,11 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       evt.preventDefault();
       evt.stopPropagation();
 
-      // 1. Update Camera (Fast)
+      
       if (evt.ctrlKey || evt.metaKey) {
         let zoom = canvas.getZoom();
         zoom *= 0.999 ** evt.deltaY;
-        // Clamp zoom
+        
         if (zoom > 20) zoom = 20;
         if (zoom < 0.01) zoom = 0.01;
         canvas.zoomToPoint(new fabric.Point(evt.offsetX, evt.offsetY), zoom);
@@ -1226,22 +1138,16 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         vpt[4] -= evt.deltaX;
       }
 
-      // 2. Fix Control Glitch (The previous fix)
+      
       const activeObject = canvas.getActiveObject();
       if (activeObject) {
         activeObject.setCoords();
       }
 
-      // 3. Render the Camera Movement
+      
       canvas.requestRenderAll();
 
-      // 4. Heavy Logic: Update Culling (Throttled)
-      // Instead of running this 100x a second, we run it once the scroll settles
-      // or simply rely on the fact that requestRenderAll handles the visual update.
-      // For standard usage, calling this on every frame is overkill.
-      // We can actually skip calling updateVisibleObjects() here for pure performance
-      // if your shapes aren't massive images.
-      // If you MUST cull, keep it, but the previous snippet optimizes it.
+      
       updateVisibleObjects();
     });
 
@@ -1255,7 +1161,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     };
     window.addEventListener('resize', handleResize);
 
-    // Initial render
+   
     updateVisibleObjects();
     canvas.requestRenderAll();
 

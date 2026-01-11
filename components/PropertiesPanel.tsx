@@ -14,23 +14,23 @@ interface PropertiesPanelProps {
 export default function PropertiesPanel({ activeTool, options, onChange }: PropertiesPanelProps) {
   const visible = getVisibleProperties(activeTool);
 
-  // Helper to update a single specific field safely
+  
   const update = (key: keyof ShapeOptions, value: any) => {
     onChange({ ...options, [key]: value });
   };
 
-  // If the tool has no options (like Eraser), don't render anything
+  
   if (activeTool === 'eraser') return null;
 
   return (
     <div className="fixed top-20 right-4 flex flex-col gap-4 bg-white p-4 rounded-lg shadow-xl border border-gray-200 z-50 w-64">
       
-      {/* HEADER */}
+      
       <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">
         {activeTool === 'selection' ? 'Properties' : `${activeTool} Options`}
       </h3>
 
-      {/* 1. STROKE SECTION (Border) */}
+      
       {visible.hasStroke && (
         <div className="flex flex-col gap-2">
           <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
