@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef } from 'react';
 import * as fabric from 'fabric';
-import { Tool } from '@/app/page';
+import { Tool } from '@/types';
 import RBush from 'rbush';
 import { ShapeOptions } from '@/types'; 
 
@@ -48,7 +48,39 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
   const optionsRef = useRef(options);
 
 
+  // Helper to determine which properties apply to a specific Fabric object type
+  const getRelevantKeys = (obj: fabric.Object): (keyof ShapeOptions)[] => {
+    const type = obj.type;
 
+    // 1. Lines, Arrows, and Pencil drawings (Paths) ONLY use Stroke.
+    // They do NOT use Fill, FontFamily, or FontSize.
+    if (['line', 'path', 'pencil'].includes(type)) {
+      return ['stroke', 'strokeWidth', 'opacity'];
+    }
+
+    // 2. Text objects use Fill (for color), FontFamily, and FontSize.
+    // We generally ignore Stroke/StrokeWidth for basic text.
+    if (['i-text', 'text'].includes(type)) {
+      return ['fill', 'opacity', 'fontFamily', 'fontSize'];
+    }
+
+    // 3. Rectangles, Circles, etc. use everything (Stroke + Fill).
+    // They do NOT use FontFamily or FontSize.
+    return ['stroke', 'strokeWidth', 'fill', 'opacity'];
+  };
+
+
+  const hasStateChanged = (obj: fabric.Object, newOptions: ShapeOptions) => {
+    // Check the specific properties we care about
+    return (
+      obj.stroke !== newOptions.stroke ||
+      obj.strokeWidth !== newOptions.strokeWidth ||
+      obj.fill !== newOptions.fill ||
+      obj.opacity !== newOptions.opacity ||
+      (obj as any).fontFamily !== newOptions.fontFamily ||
+      (obj as any).fontSize !== newOptions.fontSize
+    );
+  };
 
   const configureLineControls = (line: fabric.Line) => {
     line.setControlsVisibility({
@@ -293,25 +325,43 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     const activeObject = canvas.getActiveObject();
     if (!activeObject) return;
 
-    
+    // 1. Determine which keys are valid for this specific object (e.g., ignore 'fill' for lines)
+    const relevantKeys = getRelevantKeys(activeObject);
+
+    // 2. Check if ANY of the *relevant* keys have actually changed
+    const hasChanged = relevantKeys.some((key) => {
+      // We assume 'options' contains the new value from the UI
+      const newValue = options[key];
+      const currentValue = (activeObject as any)[key];
+      return currentValue !== newValue;
+    });
+
+    // GATEKEEPER: If nothing relevant changed, stop here. Do not save history.
+    if (!hasChanged) return;
+
+    // 3. Capture OLD state (only relevant keys)
     const oldState: any = {};
-    const keys: (keyof ShapeOptions)[] = ['stroke', 'strokeWidth', 'fill', 'opacity', 'fontFamily', 'fontSize'];
-    keys.forEach(k => { if (k in activeObject) oldState[k] = (activeObject as any)[k]; });
+    relevantKeys.forEach(key => {
+        oldState[key] = (activeObject as any)[key];
+    });
 
-    
-    activeObject.set(options);
+    // 4. Capture NEW state (subset of options)
+    const newState: any = {};
+    relevantKeys.forEach(key => {
+        newState[key] = options[key];
+    });
 
-    
-    
-
+    // 5. Apply changes to the object
+    activeObject.set(newState);
     activeObject.setCoords();
     canvas.requestRenderAll();
 
+    // 6. Save valid action to history
     saveAction({
       type: 'modify',
       object: activeObject,
       before: oldState,
-      after: options 
+      after: newState 
     });
 
   }, [options]);
@@ -863,6 +913,11 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         path: (obj as fabric.Path).path,
         pathOffset: (obj as fabric.Path).pathOffset,
       };
+
+
+      if (JSON.stringify(transformStartProps) === JSON.stringify(currentProps)) {
+        return;
+      }
 
       saveAction({
         type: 'modify',
