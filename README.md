@@ -59,5 +59,6 @@ Follow these steps to run the project locally.
 
 1. **Clone the repository:**
    ```bash
-   git clone [https://github.com/yourusername/whiteboard-app.git](https://github.com/yourusername/whiteboard-app.git)
-   cd whiteboard-app
+   git clone https://github.com/AnshMittal1/Whiteboard-app
+   cd Whiteboard-app
+   npm run dev
