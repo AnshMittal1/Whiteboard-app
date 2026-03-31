@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Minus, Type, Droplet, Square, AlignLeft } from 'lucide-react';
-import { Tool } from '@/app/page';
+import { Tool } from '@/types';
 import { ShapeOptions, getVisibleProperties } from '@/types';
 
 interface PropertiesPanelProps {

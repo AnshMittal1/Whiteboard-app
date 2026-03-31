@@ -9,7 +9,7 @@ import {
   Square 
 } from 'lucide-react';
 
-import { Tool } from '@/app/page'; 
+import { Tool } from '@/types'; 
 
 interface ToolbarProps {
   activeTool: Tool;
