@@ -48,6 +48,15 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
   const optionsRef = useRef(options);
 
 
+ 
+  const guideLineVertical = useRef<fabric.Line | null>(null);
+  const guideLineHorizontal = useRef<fabric.Line | null>(null);
+  const SNAP_THRESHOLD = 8; // Adjust this number to make the snapping stronger or weaker
+
+  // Replace dragTracker with activeSnaps
+  const activeSnaps = useRef({ x: null as number | null, y: null as number | null });
+  const snapCache = useRef<{ vertical: number[], horizontal: number[] } | null>(null);
+
   // Helper to determine which properties apply to a specific Fabric object type
   const getRelevantKeys = (obj: fabric.Object): (keyof ShapeOptions)[] => {
     const type = obj.type;
@@ -428,7 +437,7 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     
 
     const addToIndex = (obj: fabric.Object) => {
-      if (obj.type === 'activeSelection') return;
+      if (obj.type === 'activeSelection' || (obj as any).id === 'smart-guide') return;
       const box = obj.getBoundingRect();
       const item = {
         minX: box.left,
@@ -443,6 +452,9 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     };
 
     const removeFromIndex = (obj: fabric.Object) => {
+
+      if ((obj as any).id === 'smart-guide') return;
+
       const item = objectMap.current.get(obj);
       if (item) {
         spatialIndex.current.remove(item);
@@ -464,6 +476,38 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
       renderOnAddRemove: false,
     });
     canvasInstance.current = canvas;
+
+    // --- ADD POOLED SMART GUIDES HERE ---
+    const vLine = new fabric.Line([0, -999999, 0, 999999], {
+      stroke: '#FF007F', 
+      strokeWidth: 1.5, 
+      strokeDashArray: [5, 5],
+      selectable: false, 
+      evented: false, 
+      objectCaching: false, 
+      visible: false,
+      originX: 'center',
+      originY: 'center'
+    });
+    (vLine as any).id = 'smart-guide';
+
+    const hLine = new fabric.Line([-999999, 0, 999999, 0], {
+      stroke: '#FF007F', 
+      strokeWidth: 1.5, 
+      strokeDashArray: [5, 5],
+      selectable: false, 
+      evented: false, 
+      objectCaching: false, 
+      visible: false,
+      originX: 'center',
+      originY: 'center'
+    });
+    (hLine as any).id = 'smart-guide';
+
+    canvas.add(vLine, hLine);
+    guideLineVertical.current = vLine as fabric.Line;
+    guideLineHorizontal.current = hLine as fabric.Line;
+    // ------------------------------------
 
     
     const gridSize = 50;
@@ -549,7 +593,102 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
 
 
-   
+    // --- SMART GUIDES & SNAPPING LOGIC (DRIFT-FREE EXCALIDRAW) ---
+    canvas.on('object:moving', (e) => {
+      const target = e.target;
+      if (!target || !snapCache.current) return;
+
+      if (guideLineVertical.current) guideLineVertical.current.set({ visible: false });
+      if (guideLineHorizontal.current) guideLineHorizontal.current.set({ visible: false });
+
+      // 1. THE MAGIC BULLET: Double Cache Flush
+      // Fabric already set target.left/top to the absolute raw mouse intent.
+      // We force update the hitbox so getBoundingRect reads the mouse, NOT the previous frame's snap.
+      target.setCoords();
+      const activeBBox = target.getBoundingRect();
+
+      const activeAxes = {
+        vertical: [
+          { value: activeBBox.left, prop: 'left' },
+          { value: activeBBox.left + activeBBox.width / 2, prop: 'centerX' },
+          { value: activeBBox.left + activeBBox.width, prop: 'right' },
+        ],
+        horizontal: [
+          { value: activeBBox.top, prop: 'top' },
+          { value: activeBBox.top + activeBBox.height / 2, prop: 'centerY' },
+          { value: activeBBox.top + activeBBox.height, prop: 'bottom' },
+        ]
+      };
+
+      let minDiffX = Infinity;
+      let minDiffY = Infinity;
+      let bestSnapX: any = null;
+      let bestSnapY: any = null;
+
+      // 2. Evaluate Snaps with Magnetic Hysteresis
+      for (const aAxis of activeAxes.vertical) {
+        for (const tAxis of snapCache.current.vertical) {
+          const isSticky = activeSnaps.current.x === tAxis;
+          const threshold = isSticky ? SNAP_THRESHOLD * 1.5 : SNAP_THRESHOLD;
+          
+          const diff = Math.abs(tAxis - aAxis.value);
+          if (diff < threshold && diff < minDiffX) {
+            minDiffX = diff;
+            bestSnapX = { targetLine: tAxis, activeValue: aAxis.value };
+          }
+        }
+      }
+
+      for (const aAxis of activeAxes.horizontal) {
+        for (const tAxis of snapCache.current.horizontal) {
+          const isSticky = activeSnaps.current.y === tAxis;
+          const threshold = isSticky ? SNAP_THRESHOLD * 1.5 : SNAP_THRESHOLD;
+
+          const diff = Math.abs(tAxis - aAxis.value);
+          if (diff < threshold && diff < minDiffY) {
+            minDiffY = diff;
+            bestSnapY = { targetLine: tAxis, activeValue: aAxis.value };
+          }
+        }
+      }
+
+      let snapped = false;
+
+      // 3. Apply Visual Snaps
+      if (bestSnapX) {
+        const shiftX = bestSnapX.targetLine - bestSnapX.activeValue;
+        target.set({ left: target.left! + shiftX });
+        activeSnaps.current.x = bestSnapX.targetLine; // Lock the magnet
+        
+        if (guideLineVertical.current) {
+          guideLineVertical.current.set({ left: bestSnapX.targetLine, visible: true });
+          guideLineVertical.current.setCoords(); 
+        }
+        snapped = true;
+      } else {
+        activeSnaps.current.x = null; // Break the magnet
+      }
+
+      if (bestSnapY) {
+        const shiftY = bestSnapY.targetLine - bestSnapY.activeValue;
+        target.set({ top: target.top! + shiftY });
+        activeSnaps.current.y = bestSnapY.targetLine;
+
+        if (guideLineHorizontal.current) {
+          guideLineHorizontal.current.set({ top: bestSnapY.targetLine, visible: true });
+          guideLineHorizontal.current.setCoords(); 
+        }
+        snapped = true;
+      } else {
+        activeSnaps.current.y = null;
+      }
+
+      // 4. Finalize coordinates for rendering
+      if (snapped) {
+        target.setCoords(); 
+      }
+    });
+    // --- END DRIFT-FREE SMART GUIDES ---
 
     canvas.on('mouse:down', (options) => {
      
@@ -755,6 +894,30 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
     });
 
     canvas.on('mouse:up', () => {
+
+      // --- ADD THIS CLEANUP BLOCK ---
+      let needsRender = false;
+
+      // --- ADD THIS: Wipe cache memory ---
+      snapCache.current = null;
+      activeSnaps.current = { x: null, y: null }; // <--- Add this
+      // ----------------------------------
+
+      if (guideLineVertical.current && guideLineVertical.current.visible) {
+        guideLineVertical.current.set({ visible: false });
+        needsRender = true;
+      }
+      if (guideLineHorizontal.current && guideLineHorizontal.current.visible) {
+        guideLineHorizontal.current.set({ visible: false });
+        needsRender = true;
+      }
+
+      // Force canvas to clear the hidden lines immediately
+      if (needsRender) {
+        canvas.requestRenderAll();
+      }
+      // ------------------------------
+
       if (isDrawing.current) {
         isDrawing.current = false;
 
@@ -856,12 +1019,14 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
     
     canvas.on('object:added', (e) => {
+      if (e.target && (e.target as any).id === 'smart-guide') return;
       if (e.target && !historyLocked.current) {
         saveAction({ type: 'add', object: e.target });
       }
     });
 
     canvas.on('object:removed', (e) => {
+      if (e.target && (e.target as any).id === 'smart-guide') return;
       if (e.target && !historyLocked.current) {
         saveAction({ type: 'remove', object: e.target });
       }
@@ -885,6 +1050,32 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
         path: (t.target as fabric.Path).path,
         pathOffset: (t.target as fabric.Path).pathOffset,
       };
+
+      
+      // --- ADD THIS: POPULATE SNAP CACHE ---
+      const targets = canvas.getObjects().filter(
+        obj => obj !== t.target && (obj as any).id !== 'smart-guide' && obj.visible
+      );
+      
+      // Use Sets to automatically remove duplicate overlapping coordinate lines
+      const vAxes = new Set<number>();
+      const hAxes = new Set<number>();
+      
+      targets.forEach(obj => {
+        const bbox = obj.getBoundingRect();
+        vAxes.add(bbox.left);
+        vAxes.add(bbox.left + bbox.width / 2);
+        vAxes.add(bbox.left + bbox.width);
+        
+        hAxes.add(bbox.top);
+        hAxes.add(bbox.top + bbox.height / 2);
+        hAxes.add(bbox.top + bbox.height);
+      });
+
+      snapCache.current = { vertical: Array.from(vAxes), horizontal: Array.from(hAxes) };
+      activeSnaps.current = { x: null, y: null };
+      // ------------------------------------
+
     });
 
     canvas.on('object:modified', (e) => {
@@ -1130,6 +1321,9 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
     
     const updateVisibleObjects = () => {
+
+
+
       const canvas = canvasInstance.current;
       if (!canvas) return;
 
@@ -1160,6 +1354,10 @@ const Whiteboard = ({ activeTool, onToolChange, options,onOptionsChange }: White
 
       objects.forEach((obj) => {
         
+        
+        // ADD THIS LINE: Exempt smart guides from visibility culling
+        if ((obj as any).id === 'smart-guide') return;
+
         const shouldBeVisible = visibleObjects.has(obj);
 
         if (obj.visible !== shouldBeVisible) {
